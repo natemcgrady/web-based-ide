@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# web-based-ide
 
-## Getting Started
+A browser IDE built with Next.js that runs code and shell commands in isolated Vercel Sandbox instances.
 
-First, run the development server:
+## Core constraints implemented
+
+- App is built with Next.js App Router and deployable on Vercel.
+- Arbitrary execution and shell commands run only in Vercel Sandbox.
+- Browser terminal streams output over SSE.
+- Preview server runs inside sandbox and is embedded in an iframe.
+
+## Architecture
+
+- **Frontend:** Monaco editor, file explorer, terminal panel, preview panel.
+- **API routes:** session lifecycle, file sync, terminal input/events, preview start/status.
+- **Sandbox layer:** `@vercel/sandbox` for isolated command execution.
+- **Persistence layer:** in-memory by default, with optional Upstash Redis and Neon Postgres hooks.
+
+## Environment variables
+
+Set one of the Sandbox auth strategies:
+
+- Preferred on Vercel: `VERCEL_OIDC_TOKEN` (managed by Vercel context)
+- Explicit credentials:
+  - `VERCEL_SANDBOX_TOKEN`
+  - `VERCEL_SANDBOX_PROJECT_ID`
+  - `VERCEL_SANDBOX_TEAM_ID`
+
+Optional:
+
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
+- `DATABASE_URL`
+- `CRON_SECRET`
+- `SANDBOX_TIMEOUT_MS`
+- `SANDBOX_MAX_LIFETIME_MS`
+- `SANDBOX_IDLE_TIMEOUT_MS`
+- `SANDBOX_MAX_ACTIVE_PER_USER`
+- `TERMINAL_MAX_COMMAND_LENGTH`
+
+## Local development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+pnpm install
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `pnpm dev` - run app locally
+- `pnpm build` - production build
+- `pnpm lint` - run ESLint
+- `pnpm typecheck` - TypeScript checks
+- `pnpm test` - Vitest
+- `pnpm test:e2e` - Playwright
+- `pnpm db:generate` - generate Drizzle migrations
 
-## Learn More
+## Deployment on Vercel
 
-To learn more about Next.js, take a look at the following resources:
+1. Import this project into Vercel.
+2. Configure environment variables listed above.
+3. Deploy.
+4. Optional: set `CRON_SECRET` so `/api/maintenance/cleanup-sessions` can be called securely by cron.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+`vercel.json` includes a cron job to clean expired sessions every 10 minutes.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Reference docs
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Vercel Sandbox docs: `https://vercel.com/docs/vercel-sandbox`
+- IDE implementation inspiration: `https://dev.to/abdddd/how-to-build-a-web-ide-like-codesandbox-38e6`
+- Extensible IDE framework inspiration: `https://github.com/eclipse-theia/theia`
