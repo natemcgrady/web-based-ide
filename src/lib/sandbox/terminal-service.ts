@@ -43,12 +43,6 @@ export async function runTerminalCommand({
   const sandbox = await getSandbox(session.sandboxId);
   await updateSession(session.sessionId, { status: "busy" });
 
-  pushTerminalEvent({
-    sessionId: session.sessionId,
-    stream: "system",
-    payload: `$ ${command}`,
-  });
-
   const wrapped = [
     `cd ${shellSingleQuote(session.cwd)}`,
     command,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -17,14 +17,64 @@ export function TerminalPanel({
   cursor,
   onCursorChange,
 }: TerminalPanelProps) {
+  const PROMPT = "$ ";
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const [command, setCommand] = useState("");
+  const sessionIdRef = useRef<string | null>(sessionId);
+  const runningRef = useRef(false);
+  const inputBufferRef = useRef("");
+  const historyRef = useRef<string[]>([]);
+  const historyIndexRef = useRef<number | null>(null);
   const [running, setRunning] = useState(false);
   const [connected, setConnected] = useState(false);
 
-  const disabled = useMemo(() => !sessionId || running, [running, sessionId]);
+  const writePrompt = useCallback(() => {
+    termRef.current?.write(PROMPT);
+  }, []);
+
+  const replaceInput = useCallback((nextValue: string) => {
+    const terminal = termRef.current;
+    if (!terminal) {
+      return;
+    }
+
+    const currentValue = inputBufferRef.current;
+    if (currentValue.length > 0) {
+      terminal.write("\b \b".repeat(currentValue.length));
+    }
+    inputBufferRef.current = nextValue;
+    terminal.write(nextValue);
+  }, []);
+
+  const submitCommand = useCallback(
+    async (command: string) => {
+      const activeSessionId = sessionIdRef.current;
+      if (!activeSessionId) {
+        termRef.current?.writeln(
+          "\x1b[33mCreate a sandbox session before running commands.\x1b[0m",
+        );
+        writePrompt();
+        return;
+      }
+
+      setRunning(true);
+      runningRef.current = true;
+
+      try {
+        await sendTerminalInput(activeSessionId, command);
+      } catch (error) {
+        termRef.current?.writeln(
+          `\x1b[31m${error instanceof Error ? error.message : "Command failed."}\x1b[0m`,
+        );
+      } finally {
+        setRunning(false);
+        runningRef.current = false;
+        writePrompt();
+      }
+    },
+    [writePrompt],
+  );
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -44,6 +94,7 @@ export function TerminalPanel({
     terminal.open(containerRef.current);
     fitAddon.fit();
     terminal.writeln("web-based-ide terminal connected.");
+    terminal.write(PROMPT);
     termRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
@@ -56,6 +107,109 @@ export function TerminalPanel({
       fitAddonRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  useEffect(() => {
+    runningRef.current = running;
+  }, [running]);
+
+  useEffect(() => {
+    const terminal = termRef.current;
+    if (!terminal) {
+      return;
+    }
+
+    const disposable = terminal.onData((data) => {
+      if (data === "\x1b[A") {
+        const history = historyRef.current;
+        if (history.length === 0) {
+          return;
+        }
+        if (historyIndexRef.current === null) {
+          historyIndexRef.current = history.length - 1;
+        } else if (historyIndexRef.current > 0) {
+          historyIndexRef.current -= 1;
+        }
+        replaceInput(history[historyIndexRef.current] ?? "");
+        return;
+      }
+
+      if (data === "\x1b[B") {
+        const history = historyRef.current;
+        if (history.length === 0 || historyIndexRef.current === null) {
+          return;
+        }
+        if (historyIndexRef.current < history.length - 1) {
+          historyIndexRef.current += 1;
+          replaceInput(history[historyIndexRef.current] ?? "");
+        } else {
+          historyIndexRef.current = null;
+          replaceInput("");
+        }
+        return;
+      }
+
+      for (const chunk of data) {
+        if (chunk === "\r") {
+          const command = inputBufferRef.current.trim();
+          inputBufferRef.current = "";
+          historyIndexRef.current = null;
+          terminal.write("\r\n");
+
+          if (!command) {
+            writePrompt();
+            continue;
+          }
+
+          if (runningRef.current) {
+            terminal.writeln("\x1b[33mA command is already running.\x1b[0m");
+            writePrompt();
+            continue;
+          }
+
+          historyRef.current.push(command);
+          void submitCommand(command);
+          continue;
+        }
+
+        if (chunk === "\u007f") {
+          if (!runningRef.current && inputBufferRef.current.length > 0) {
+            inputBufferRef.current = inputBufferRef.current.slice(0, -1);
+            terminal.write("\b \b");
+          }
+          continue;
+        }
+
+        if (chunk === "\u0003") {
+          if (runningRef.current) {
+            terminal.writeln("^C");
+            terminal.writeln(
+              "\x1b[33mInterrupt is not available yet in this terminal mode.\x1b[0m",
+            );
+          } else {
+            inputBufferRef.current = "";
+            terminal.writeln("^C");
+          }
+          writePrompt();
+          continue;
+        }
+
+        if (runningRef.current || chunk < " " || chunk === "\x1b") {
+          continue;
+        }
+
+        inputBufferRef.current += chunk;
+        terminal.write(chunk);
+      }
+    });
+
+    return () => {
+      disposable.dispose();
+    };
+  }, [replaceInput, submitCommand, writePrompt]);
 
   useEffect(() => {
     if (!sessionId || !termRef.current) {
@@ -93,44 +247,11 @@ export function TerminalPanel({
     <div className="flex h-full flex-col border-t border-zinc-800 bg-zinc-950">
       <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2 text-xs text-zinc-400">
         <span>Terminal</span>
-        <span>{connected ? "streaming" : "reconnecting..."}</span>
+        <span>
+          {connected ? (running ? "running command..." : "streaming") : "reconnecting..."}
+        </span>
       </div>
       <div ref={containerRef} className="min-h-0 flex-1 px-2 py-1" />
-      <form
-        className="flex gap-2 border-t border-zinc-800 p-2"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (!sessionId || !command.trim()) {
-            return;
-          }
-          try {
-            setRunning(true);
-            await sendTerminalInput(sessionId, command.trim());
-            setCommand("");
-          } catch (error) {
-            termRef.current?.writeln(
-              `\x1b[31m${error instanceof Error ? error.message : "Command failed."}\x1b[0m`,
-            );
-          } finally {
-            setRunning(false);
-          }
-        }}
-      >
-        <input
-          value={command}
-          onChange={(event) => setCommand(event.target.value)}
-          placeholder={sessionId ? "Type a shell command..." : "Create a session first"}
-          disabled={disabled}
-          className="w-full rounded border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 outline-none focus:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-60"
-        />
-        <button
-          type="submit"
-          disabled={disabled}
-          className="rounded bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Run
-        </button>
-      </form>
     </div>
   );
 }
